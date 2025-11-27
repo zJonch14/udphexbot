@@ -7,8 +7,11 @@ import os
 UDP_HEX_V1_SCRIPT = "udphexv1"
 UDP_HEX_V2_SCRIPT = "udphexv2"
 
-# Crear el bot
-bot = commands.Bot(command_prefix='!')
+# Crear el bot con intents
+intents = discord.Intents.default()
+intents.message_content = True
+
+bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Evento al iniciar el bot
 @bot.event
